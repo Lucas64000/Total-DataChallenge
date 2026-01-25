@@ -1,0 +1,32 @@
+# PhotoTrap Wildlife Analysis System - Production Dependencies
+
+# Core ML
+# Note: PyTorch must be installed separately with CUDA support:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126
+ultralytics>=8.0.0
+open-clip-torch>=2.20.0
+faiss-cpu>=1.7.2
+onnx>=1.14.0
+onnxruntime-gpu>=1.15.0
+
+# API & Infrastructure
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-multipart>=0.0.6
+
+# Image Processing
+opencv-python>=4.8.0
+pillow>=10.0.0
+scikit-image>=0.21.0
+
+# Utilities
+numpy>=1.24.0
+pandas>=2.0.0
+tqdm>=4.65.0
+python-dotenv>=1.0.0
+requests>=2.31.0
+
+# Logging
+loguru>=0.7.0

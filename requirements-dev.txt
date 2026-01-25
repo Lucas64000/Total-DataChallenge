@@ -1,0 +1,25 @@
+# PhotoTrap Wildlife Analysis System - Development Dependencies
+
+# Include production dependencies
+-r requirements.txt
+
+# Testing
+pytest>=7.4.0
+pytest-cov>=4.1.0
+pytest-asyncio>=0.21.0
+httpx>=0.24.0
+
+# Linting & Formatting
+ruff>=0.1.0
+black>=23.0.0
+isort>=5.12.0
+mypy>=1.5.0
+
+# Type stubs
+types-requests>=2.31.0
+types-pillow>=10.0.0
+
+# Development utilities
+ipython>=8.0.0
+jupyter>=1.0.0
+pre-commit>=3.4.0
