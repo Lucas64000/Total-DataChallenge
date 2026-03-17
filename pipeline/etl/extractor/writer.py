@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 from pathlib import Path
 from threading import Lock
 
 from pipeline.etl.config import PreprocessingConfig
 from pipeline.etl.extractor.data_models import ExtractionStats, FileData, FilePair
-from utils.protocols import WarningLoggerProtocol
 
 
 class ExtractionWriter:
@@ -20,7 +20,7 @@ class ExtractionWriter:
         stats: ExtractionStats,
         stats_lock: Lock,
         skip_existing: bool,
-        logger: WarningLoggerProtocol,
+        logger: logging.Logger,
     ) -> None:
         """
         Initialize writer with shared state for thread-safe extraction.
@@ -30,7 +30,7 @@ class ExtractionWriter:
             stats: Shared mutable counters.
             stats_lock: Lock protecting concurrent stat increments
             skip_existing: When ``True``, skip files already on disk.
-            logger: Logger for orphan warnings and errors.
+            logger: Module logger for warnings and errors.
         """
         self._config = config
         self._stats = stats

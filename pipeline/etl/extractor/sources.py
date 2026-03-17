@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 import zipfile
 from pathlib import Path
 
 from pipeline.etl.config import IMAGE_EXTENSIONS
 from pipeline.etl.extractor.data_models import FileData, FilePair, LabelizedScanResult
-from utils.protocols import ScanLoggerProtocol
 
 
 def find_classes_file(root: Path) -> Path | None:
@@ -28,12 +28,12 @@ def find_classes_file(root: Path) -> Path | None:
 class SourceScanner:
     """Scan filesystem and ZIP sources into ETL extraction models."""
 
-    def __init__(self, logger: ScanLoggerProtocol) -> None:
+    def __init__(self, logger: logging.Logger) -> None:
         """
         Initialize scanner with a logger for warnings and progress.
 
         Args:
-            logger: Logger satisfying the scan-level protocol.
+            logger: Module logger used for scan warnings and progress.
         """
         self._logger = logger
 
