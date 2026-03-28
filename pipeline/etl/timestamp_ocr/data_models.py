@@ -36,5 +36,9 @@ class OCREngineProtocol(Protocol):
         ...
 
     def read_batch(self, images: list[Image.Image]) -> list[str]:
-        """Read text from multiple PIL images in input order."""
+        """Read text from multiple PIL images in input order.
+
+        Implementations must return exactly ``len(images)`` strings,
+        preserving input order.
+        """
         ...

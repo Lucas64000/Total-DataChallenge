@@ -8,12 +8,12 @@ from pathlib import Path
 from PIL import Image
 from tqdm import tqdm
 
+from pipeline.etl.config import PreprocessingConfig
 from pipeline.etl.timestamp_ocr.camera_profiles import CameraProfile, get_profile
 from pipeline.etl.timestamp_ocr.data_models import OCREngineProtocol, TimestampResult
 from pipeline.etl.timestamp_ocr.parser import parse_timestamp
 from pipeline.etl.timestamp_ocr.trocr_engine import TrOCREngine
 from pipeline.etl.transform.filename_parser import detect_camera_type
-from utils.config import get_config
 from utils.logging_system import LogCategory, get_phototrap_logger
 from utils.types import CameraType
 
@@ -56,6 +56,7 @@ class TimestampExtractor:
         self,
         gpu: bool = True,
         ocr_engine: OCREngineProtocol | None = None,
+        config: PreprocessingConfig | None = None,
     ) -> None:
         """
         Initialize the extractor with an OCR engine.
@@ -66,13 +67,14 @@ class TimestampExtractor:
             ocr_engine: Optional pre-built OCR engine satisfying
                 ``OCREngineProtocol``. When ``None``, a ``TrOCREngine``
                 is created automatically.
+            config: ETL preprocessing configuration. When ``None``, defaults are used.
         """
         self._logger: Logger = get_phototrap_logger().get_logger(
             LogCategory.PREPROCESSING, "timestamp_extractor"
         )
 
-        config = get_config()
-        self._ts_config = config.preprocessing.timestamp
+        self._config = config or PreprocessingConfig()
+        self._ts_config = self._config.timestamp
 
         if ocr_engine is not None:
             self._ocr_engine = ocr_engine
@@ -223,6 +225,7 @@ class TimestampExtractor:
 
         for idx, image_path in enumerate(paths):
             camera_type = detect_camera_type(image_path.name)
+            # Profile lookup is done once per image and reused through batch processing.
             profile = get_profile(camera_type)
             to_process.append((idx, image_path, camera_type, profile))
 
@@ -240,18 +243,7 @@ class TimestampExtractor:
                 batch = to_process[batch_start : batch_start + batch_size]
                 self._process_batch(batch, results)
 
-        # Defensive guard: convert any unexpected missing slot into an explicit failure result.
-        final_results = [
-            result
-            if result is not None
-            else TimestampResult(
-                timestamp=None,
-                camera_type="unknown",
-                success=False,
-                error="Internal error: result not populated",
-            )
-            for result in results
-        ]
+        final_results: list[TimestampResult] = results  # type: ignore[assignment]
 
         success_count = sum(1 for r in final_results if r.success)
         success_rate = 100 * success_count / len(final_results)
@@ -304,16 +296,5 @@ class TimestampExtractor:
                 )
             return
 
-        if len(ocr_texts) != len(valid_items):
-            msg = (
-                "Batch OCR contract violation: "
-                f"expected {len(valid_items)} outputs, got {len(ocr_texts)}"
-            )
-            self._logger.warning(msg)
-            for idx, _, camera_type, _ in valid_items:
-                results[idx] = _build_error_result(camera_type=camera_type, error=msg)
-            return
-
-        # `read_batch` guarantees output order, so zip keeps item/text alignment.
         for (idx, _image_path, camera_type, profile), raw_text in zip(valid_items, ocr_texts):
             results[idx] = self._result_from_raw_text(raw_text, camera_type, profile)

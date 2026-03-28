@@ -63,6 +63,7 @@ class TrOCREngine(OCREngineProtocol):
             return []
 
         rgb_images = [img.convert("RGB") for img in images]
+        # Processor applies TrOCR feature extraction + tensor padding for the whole batch.
         pixel_values = self._processor(rgb_images, return_tensors="pt").pixel_values
         pixel_values = pixel_values.to(self._device)
 

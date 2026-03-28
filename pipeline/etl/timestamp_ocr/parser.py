@@ -54,6 +54,7 @@ def _try_pattern(
     if not match:
         return None
 
+    # Groups are captured by regex on OCR text extracted from the image overlay (capture timestamp).
     groups = match.groups()
     order = pattern.group_order
 
@@ -65,6 +66,7 @@ def _try_pattern(
     second = int(groups[order[5]])
 
     if not (min_year <= year <= max_year):
+        # Reject OCR hallucinations like 1023 or 3025 early before datetime construction.
         return None
 
     try:

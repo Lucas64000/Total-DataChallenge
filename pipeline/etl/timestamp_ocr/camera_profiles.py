@@ -101,7 +101,6 @@ class CameraProfile(ABC):
         ...
 
 
-
 # Regex building blocks.
 # Camera overlays may use ":" or "." between time fields (OCR can misread ":" as ".").
 _STRICT_SEP = r"[:.]"
