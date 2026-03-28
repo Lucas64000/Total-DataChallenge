@@ -68,3 +68,58 @@ def test_image_validator_rejects_corrupted_payload() -> None:
     # Random bytes should fail image decoding/verification.
     result = ImageValidator().validate(b"not_an_image", filename="bad.jpg")
     assert not result.is_valid
+
+
+# --- additional YOLO edge cases ---
+
+
+def test_yolo_wrong_column_count() -> None:
+    # Only 4 values instead of the required 5.
+    result = YOLOValidator(classes=["a"]).validate("0 0.5 0.5 0.1")
+    assert not result.is_valid
+    assert "expected 5 values" in (result.error or "")
+
+
+def test_yolo_negative_class_id() -> None:
+    result = YOLOValidator(classes=["a"]).validate("-1 0.5 0.5 0.1 0.1")
+    assert not result.is_valid
+    assert "class_id must be >= 0" in (result.error or "")
+
+
+def test_yolo_zero_width_rejected() -> None:
+    # Width must be strictly positive: ]0, 1].
+    result = YOLOValidator(classes=["a"]).validate("0 0.5 0.5 0.0 0.1")
+    assert not result.is_valid
+    assert "width" in (result.error or "")
+
+
+def test_yolo_vertical_bounds_overflow() -> None:
+    # y_center=0.9 + height/2=0.2 → 1.1 exceeds upper bound.
+    result = YOLOValidator(classes=["a"]).validate("0 0.5 0.9 0.1 0.4")
+    assert not result.is_valid
+    assert "vertical bounds" in (result.error or "")
+
+
+def test_yolo_non_numeric_value_rejected() -> None:
+    result = YOLOValidator(classes=["a"]).validate("0 abc 0.5 0.1 0.1")
+    assert not result.is_valid
+
+
+def test_yolo_multiline_valid_returns_class_ids() -> None:
+    content = "0 0.5 0.5 0.1 0.1\n1 0.3 0.3 0.2 0.2\n"
+    result = YOLOValidator(classes=["a", "b"]).validate(content)
+    assert result.is_valid
+    assert result.class_ids == [0, 1]
+
+
+def test_yolo_center_outside_normalized_range() -> None:
+    # x_center = 1.5 is outside [0, 1].
+    result = YOLOValidator(classes=["a"]).validate("0 1.5 0.5 0.1 0.1")
+    assert not result.is_valid
+    assert "x_center" in (result.error or "")
+
+
+def test_yolo_whitespace_only_classes_rejected() -> None:
+    # Whitespace-only entries are stripped; if nothing remains, init must fail.
+    with pytest.raises(ValueError, match="classes must be provided"):
+        YOLOValidator(classes=["  ", "\t", ""])
