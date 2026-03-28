@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -75,17 +76,6 @@ def _patch_image_open():  # noqa: ANN202
     )
 
 
-def _reconyx_path(index: int = 1) -> Path:
-    """Build a deterministic Reconyx-style filename used in OCR tests."""
-    return Path(f"FR_N0431652-111_W0000251-205_20220725_Fox_RCNX{index:04d}.jpg")
-
-
-@pytest.fixture
-def reconyx_path() -> Path:
-    """Shared single-image path used across most extractor tests."""
-    return _reconyx_path(1)
-
-
 # ---------------------------------------------------------------------------
 # Single-image extract()
 # ---------------------------------------------------------------------------
@@ -157,7 +147,7 @@ class TestExtractSingle:
 class TestExtractBatch:
     """Tests for batch extraction workflow."""
 
-    def test_preserves_input_order(self) -> None:
+    def test_preserves_input_order(self, reconyx_path_builder: Callable[[int], Path]) -> None:
         engine = _FakeOCREngine(
             batch_texts=[
                 "2021-05-12 10:30:01",
@@ -166,7 +156,7 @@ class TestExtractBatch:
             ]
         )
         extractor = TimestampExtractor(gpu=False, ocr_engine=engine)
-        paths = [_reconyx_path(i) for i in range(1, 4)]
+        paths = [reconyx_path_builder(i) for i in range(1, 4)]
 
         with _patch_image_open():
             results = extractor.extract_batch(paths, show_progress=False, batch_size=3)
@@ -183,7 +173,9 @@ class TestExtractBatch:
         results = extractor.extract_batch([], show_progress=False)
         assert results == []
 
-    def test_multi_batch_processes_all_images(self) -> None:
+    def test_multi_batch_processes_all_images(
+        self, reconyx_path_builder: Callable[[int], Path]
+    ) -> None:
         engine = _FakeOCREngine(
             batch_texts=[
                 "2021-05-12 10:00:01",
@@ -194,7 +186,7 @@ class TestExtractBatch:
             ]
         )
         extractor = TimestampExtractor(gpu=False, ocr_engine=engine)
-        paths = [_reconyx_path(i) for i in range(1, 6)]
+        paths = [reconyx_path_builder(i) for i in range(1, 6)]
 
         with _patch_image_open():
             results = extractor.extract_batch(paths, show_progress=False, batch_size=2)
@@ -202,7 +194,9 @@ class TestExtractBatch:
         assert len(results) == 5
         assert all(r.success for r in results)
 
-    def test_splits_work_into_expected_batch_sizes(self) -> None:
+    def test_splits_work_into_expected_batch_sizes(
+        self, reconyx_path_builder: Callable[[int], Path]
+    ) -> None:
         engine = _FakeOCREngine(
             batch_texts=[
                 "2021-05-12 10:00:01",
@@ -213,7 +207,7 @@ class TestExtractBatch:
             ]
         )
         extractor = TimestampExtractor(gpu=False, ocr_engine=engine)
-        paths = [_reconyx_path(i) for i in range(1, 6)]
+        paths = [reconyx_path_builder(i) for i in range(1, 6)]
 
         with (
             patch.object(engine, "read_batch", wraps=engine.read_batch) as read_batch_spy,
@@ -226,10 +220,12 @@ class TestExtractBatch:
         # 5 paths with batch_size=2 must produce batches [2, 2, 1].
         assert [len(call.args[0]) for call in read_batch_spy.call_args_list] == [2, 2, 1]
 
-    def test_marks_all_items_failed_when_batch_ocr_crashes(self) -> None:
+    def test_marks_all_items_failed_when_batch_ocr_crashes(
+        self, reconyx_path_builder: Callable[[int], Path]
+    ) -> None:
         engine = _FakeOCREngine(fail_batch=True)
         extractor = TimestampExtractor(gpu=False, ocr_engine=engine)
-        paths = [_reconyx_path(1), _reconyx_path(2)]
+        paths = [reconyx_path_builder(1), reconyx_path_builder(2)]
 
         with _patch_image_open():
             results = extractor.extract_batch(paths, show_progress=False, batch_size=2)
@@ -237,10 +233,12 @@ class TestExtractBatch:
         assert [r.success for r in results] == [False, False]
         assert all("Batch OCR failed" in (r.error or "") for r in results)
 
-    def test_marks_only_unreadable_images_as_failed(self) -> None:
+    def test_marks_only_unreadable_images_as_failed(
+        self, reconyx_path_builder: Callable[[int], Path]
+    ) -> None:
         engine = _FakeOCREngine(batch_texts=["2021-05-12 10:30:01"])
         extractor = TimestampExtractor(gpu=False, ocr_engine=engine)
-        paths = [_reconyx_path(1), _reconyx_path(2)]
+        paths = [reconyx_path_builder(1), reconyx_path_builder(2)]
 
         def _open(path: Path) -> _FakeImage:
             if path.name.endswith("RCNX0002.jpg"):

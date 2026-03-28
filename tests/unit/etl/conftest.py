@@ -1,4 +1,4 @@
-"""Shared fixtures for extractor unit tests."""
+"""Shared fixtures for ETL unit tests."""
 
 import shutil
 from pathlib import Path
@@ -12,7 +12,7 @@ def sandbox(request: pytest.FixtureRequest) -> Path:
     Isolated temporary directory scoped to one test.
 
     Each test gets its own folder (named after the module + test function) so
-    tests that write real files to disk never interfere with each other.  The
+    tests that write real files to disk never interfere with each other. The
     directory is removed both before (in case a previous run crashed) and after
     the test to keep the workspace clean.
     """

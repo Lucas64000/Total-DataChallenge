@@ -92,19 +92,15 @@ class TestProfileRegistry:
 
 
 class TestReconyxProfile:
-    @pytest.fixture
-    def profile(self) -> ReconyxProfile:
-        return ReconyxProfile()
-
-    def test_rejects_eu_format_patterns(self, profile: ReconyxProfile) -> None:
+    def test_rejects_eu_format_patterns(self, reconyx_profile: ReconyxProfile) -> None:
         # Reconyx contract: only ISO variants are supported.
         text = "28-05-2016 09:39:54"
-        assert all(pattern.pattern.search(text) is None for pattern in profile.patterns)
+        assert all(pattern.pattern.search(text) is None for pattern in reconyx_profile.patterns)
 
-    def test_all_patterns_use_iso_group_order(self, profile: ReconyxProfile) -> None:
+    def test_all_patterns_use_iso_group_order(self, reconyx_profile: ReconyxProfile) -> None:
         # group_order defines how regex groups map to datetime components.
         iso_order = (0, 1, 2, 3, 4, 5)
-        assert all(pattern.group_order == iso_order for pattern in profile.patterns)
+        assert all(pattern.group_order == iso_order for pattern in reconyx_profile.patterns)
 
 
 # ---------------------------------------------------------------------------
@@ -113,26 +109,22 @@ class TestReconyxProfile:
 
 
 class TestBolyProfile:
-    @pytest.fixture
-    def profile(self) -> BolyProfile:
-        return BolyProfile()
-
-    def test_iso_patterns_are_prioritized_before_eu(self, profile: BolyProfile) -> None:
+    def test_iso_patterns_are_prioritized_before_eu(self, boly_profile: BolyProfile) -> None:
         # The parser stops at first match, so order matters.
         # ISO is most common in the dataset and must be tried first.
         iso_order = (0, 1, 2, 3, 4, 5)
         eu_order = (2, 1, 0, 3, 4, 5)
-        orders = [pattern.group_order for pattern in profile.patterns]
+        orders = [pattern.group_order for pattern in boly_profile.patterns]
         assert orders == [iso_order, iso_order, eu_order, eu_order]
 
     @pytest.mark.parametrize(
         "pattern_index", [2, 3], ids=["eu-with-separators", "eu-no-separators"]
     )
     def test_eu_patterns_use_day_month_year_remapping(
-        self, profile: BolyProfile, pattern_index: int
+        self, boly_profile: BolyProfile, pattern_index: int
     ) -> None:
         # EU regex captures (day, month, year), then remaps to (year, month, day).
-        assert profile.patterns[pattern_index].group_order == (2, 1, 0, 3, 4, 5)
+        assert boly_profile.patterns[pattern_index].group_order == (2, 1, 0, 3, 4, 5)
 
 
 # ---------------------------------------------------------------------------
@@ -141,14 +133,10 @@ class TestBolyProfile:
 
 
 class TestUnknownProfile:
-    @pytest.fixture
-    def profile(self) -> UnknownProfile:
-        return UnknownProfile()
-
-    def test_keeps_broad_fallback_pattern_set(self, profile: UnknownProfile) -> None:
+    def test_keeps_broad_fallback_pattern_set(self, unknown_profile: UnknownProfile) -> None:
         # Unknown profile is recall-first: ISO + EU, with and without time separators.
-        assert len(profile.patterns) == 4
-        assert [pattern.group_order for pattern in profile.patterns] == [
+        assert len(unknown_profile.patterns) == 4
+        assert [pattern.group_order for pattern in unknown_profile.patterns] == [
             (0, 1, 2, 3, 4, 5),
             (0, 1, 2, 3, 4, 5),
             (2, 1, 0, 3, 4, 5),
