@@ -9,9 +9,11 @@ from threading import Lock
 
 from tqdm import tqdm
 
-from pipeline.etl.config import PreprocessingConfig
+from pipeline.etl.class_catalog import load_class_catalog
+from pipeline.etl.config import LABELED_SPECIES, PreprocessingConfig
 from pipeline.etl.extractor.data_models import ExtractionStats, FilePair
-from pipeline.etl.extractor.sources import SourceScanner, find_classes_file
+from pipeline.etl.extractor.sources import SourceScanner
+from pipeline.etl.extractor.validators import ImageValidator, YOLOValidator
 from pipeline.etl.extractor.writer import ExtractionWriter
 from utils.logging_system import LogCategory, get_phototrap_logger
 
@@ -29,20 +31,40 @@ class Extractor:
         config: PreprocessingConfig | None = None,
         num_workers: int | None = None,
         skip_existing: bool = True,
+        move_invalid: bool = True,
     ) -> None:
+        """
+        Initialize extractor runtime settings.
+
+        Args:
+            config: ETL preprocessing configuration (paths, dry-run, backup behavior).
+                When ``None``, default ``PreprocessingConfig`` is used.
+            num_workers: Maximum worker threads for labeled pair extraction.
+                When ``None``, uses ``os.cpu_count()`` and is capped to 16.
+            skip_existing: Whether to skip writing files that already exist in output.
+            move_invalid: When ``True``, files that fail validation are moved to
+                ``backup/invalid`` instead of being silently dropped.
+
+        Raises:
+            ValueError: If ``num_workers`` is provided and is <= 0.
+        """
         self._config = config or PreprocessingConfig()
         if num_workers is not None and num_workers <= 0:
             raise ValueError("num_workers must be > 0")
 
         resolved_workers = num_workers if num_workers is not None else (os.cpu_count() or 1)
+        # Upper bound keeps IO-bound extraction from overscheduling too many threads.
         self._num_workers = min(resolved_workers, 16)
         self._skip_existing = skip_existing
+        self._move_invalid = move_invalid
         self._logger = get_phototrap_logger().get_logger(
             LogCategory.PREPROCESSING, "extractor"
         )
         self._stats = ExtractionStats()
         self._stats_lock = Lock()
         self._scanner = SourceScanner(self._logger)
+        self._image_validator = ImageValidator()
+        self._yolo_validator: YOLOValidator | None = None
 
     def extract(self) -> ExtractionStats:
         """
@@ -66,7 +88,7 @@ class Extractor:
         Build the shared writer used by extraction workers.
 
         Returns:
-            Writer configured with shared stats and lock.
+            Writer configured with shared stats, lock, and validators.
         """
         return ExtractionWriter(
             config=self._config,
@@ -74,6 +96,9 @@ class Extractor:
             stats_lock=self._stats_lock,
             skip_existing=self._skip_existing,
             logger=self._logger,
+            image_validator=self._image_validator,
+            yolo_validator=self._yolo_validator,
+            move_invalid=self._move_invalid,
         )
 
     def _extract_labelized(self, writer: ExtractionWriter) -> None:
@@ -91,8 +116,10 @@ class Extractor:
         self._logger.info("Extracting labelized from: %s", source_labelized)
 
         self._copy_classes_file(source_labelized, writer)
+        self._load_yolo_validator()
         scan_result = self._scanner.scan_labelized_sources(source_labelized)
         file_pairs = scan_result.pairs
+        # Duplicates are quarantined immediately and excluded from main extraction flow.
         for duplicate_image in scan_result.duplicate_images:
             writer.quarantine_labelized_duplicate_image(duplicate_image)
         for duplicate_annotation in scan_result.duplicate_annotations:
@@ -102,6 +129,7 @@ class Extractor:
 
         pairs_list = sorted(file_pairs.values(), key=lambda pair: pair.stem)
         with ThreadPoolExecutor(max_workers=self._num_workers) as executor:
+            # Keep future -> pair map to report precise failures from worker threads.
             futures = {executor.submit(self._process_pair, writer, pair): pair for pair in pairs_list}
             for future in tqdm(
                 as_completed(futures),
@@ -146,29 +174,50 @@ class Extractor:
 
     def _copy_classes_file(self, root: Path, writer: ExtractionWriter) -> None:
         """
-        Copy ``classes.txt`` from regular folders or ZIP sources.
+        Copy ``classes.txt`` discovered by the source scanner.
 
         Args:
             root: Labeled source root.
             writer: Writer used to persist ``classes.txt``.
         """
-        classes_file = find_classes_file(root)
-        if classes_file:
-            content = classes_file.read_bytes()
+        classes_payload = self._scanner.find_classes_content(root)
+        if classes_payload is not None:
+            content, source_hint = classes_payload
             writer.write_classes_file(content)
-            self._logger.info("Copied classes.txt from %s", classes_file)
+            self._logger.info("Copied classes.txt from %s", source_hint)
             return
 
-        for zip_path in sorted(root.rglob("*.zip"), key=lambda p: p.as_posix()):
-            if not zip_path.is_file():
-                continue
-            zip_content = self._scanner.find_classes_in_zip(zip_path)
-            if zip_content:
-                writer.write_classes_file(zip_content)
-                self._logger.info("Copied classes.txt from %s", zip_path)
-                return
-
         self._logger.warning("No classes.txt found in source")
+
+    def _load_yolo_validator(self) -> None:
+        """
+        Build a ``YOLOValidator`` from the extracted ``classes.txt``.
+
+        Called after ``_copy_classes_file`` so that the output file exists.
+        If ``classes.txt`` is missing or unreadable, labeled annotation
+        validation is skipped (``_yolo_validator`` stays ``None``).
+        """
+        classes_file = self._config.paths.classes_file
+        if not classes_file.exists():
+            self._logger.warning(
+                "No classes.txt at %s — YOLO annotation validation disabled",
+                classes_file,
+            )
+            return
+
+        try:
+            catalog = load_class_catalog(classes_file, LABELED_SPECIES)
+        except (FileNotFoundError, RuntimeError, ValueError) as exc:
+            self._logger.warning(
+                "Could not load class catalog: %s — YOLO annotation validation disabled",
+                exc,
+            )
+            return
+
+        self._yolo_validator = YOLOValidator(classes=list(catalog.source_classes))
+        self._logger.info(
+            "YOLO validator ready: %d classes", self._yolo_validator.num_classes
+        )
 
     @staticmethod
     def _process_pair(writer: ExtractionWriter, pair: FilePair) -> None:
@@ -191,7 +240,8 @@ class Extractor:
         """Log aggregated extraction counters."""
         self._logger.info(
             "Extraction complete: %d pairs, %d orphan images, %d orphan annotations, %d unlabeled images, "
-            "%d duplicate labeled images, %d duplicate labeled annotations, %d duplicate unlabeled images "
+            "%d duplicate labeled images, %d duplicate labeled annotations, %d duplicate unlabeled images, "
+            "%d invalid labeled, %d invalid unlabeled "
             "(%d skipped, %d errors)",
             self._stats.pairs_extracted,
             self._stats.orphan_images,
@@ -200,6 +250,8 @@ class Extractor:
             self._stats.duplicate_labelized_images,
             self._stats.duplicate_labelized_annotations,
             self._stats.duplicate_unlabeled_images,
+            self._stats.invalid_labeled,
+            self._stats.invalid_unlabeled,
             self._stats.skipped_existing,
             self._stats.extraction_errors,
         )

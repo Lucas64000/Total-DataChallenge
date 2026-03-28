@@ -1,14 +1,12 @@
-"""Reusable validators for ETL checks."""
+"""File-content validators for ETL extraction."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
-from pipeline.etl.transform.filename_parser import FilenameParser
 from utils.logging_system import LogCategory, get_phototrap_logger
 
 
@@ -18,6 +16,7 @@ class ValidationResult:
 
     is_valid: bool
     error: str | None = None
+    class_ids: list[int] | None = None
 
 
 class YOLOValidator:
@@ -43,34 +42,6 @@ class YOLOValidator:
             LogCategory.PREPROCESSING, "yolo_validator"
         )
 
-    @classmethod
-    def from_classes_file(cls, path: Path) -> YOLOValidator:
-        """
-        Build validator from a ``classes.txt`` file.
-
-        Args:
-            path: Path to ``classes.txt``.
-
-        Returns:
-            Configured YOLO validator.
-        """
-        classes = path.read_text(encoding="utf-8").strip().splitlines()
-        return cls(classes)
-
-    @classmethod
-    def from_classes_content(cls, content: str) -> YOLOValidator:
-        """
-        Build validator from raw class content.
-
-        Args:
-            content: Newline-separated class names.
-
-        Returns:
-            Configured YOLO validator.
-        """
-        classes = content.strip().splitlines()
-        return cls(classes)
-
     def validate(self, content: str, filename: str = "") -> ValidationResult:
         """
         Validate YOLO annotation content line by line.
@@ -84,9 +55,11 @@ class YOLOValidator:
         """
         lines = content.strip().splitlines()
         if not lines:
-            return ValidationResult(is_valid=True)
+            return ValidationResult(is_valid=True, class_ids=[])
 
+        parsed_class_ids: list[int] = []
         for i, line in enumerate(lines, 1):
+            # YOLO rows are expected as: class_id x_center y_center width height
             parts = line.strip().split()
             if len(parts) != 5:
                 error = f"Line {i}: expected 5 values, got {len(parts)}"
@@ -95,6 +68,7 @@ class YOLOValidator:
 
             try:
                 class_id = int(parts[0])
+                parsed_class_ids.append(class_id)
                 if class_id < 0:
                     error = f"Line {i}: class_id must be >= 0"
                     self._logger.debug("[%s] %s", filename, error)
@@ -109,17 +83,20 @@ class YOLOValidator:
                 x_center, y_center, width, height = [float(p) for p in parts[1:]]
 
                 for name, val in (("x_center", x_center), ("y_center", y_center)):
+                    # Centers can touch image borders (0 or 1), unlike width/height.
                     if not 0.0 <= val <= 1.0:
                         error = f"Line {i}: {name} ({val}) not in interval [0, 1]"
                         self._logger.debug("[%s] %s", filename, error)
                         return ValidationResult(is_valid=False, error=error)
 
                 for name, val in (("width", width), ("height", height)):
+                    # Zero-size boxes are invalid; positive area is required.
                     if not 0.0 < val <= 1.0:
                         error = f"Line {i}: {name} ({val}) not in interval ]0, 1]"
                         self._logger.debug("[%s] %s", filename, error)
                         return ValidationResult(is_valid=False, error=error)
 
+                # Final geometric guard: the full box must remain inside normalized image bounds.
                 if x_center - width / 2 < 0 or x_center + width / 2 > 1:
                     error = f"Line {i}: bbox exceeds horizontal bounds"
                     self._logger.debug("[%s] %s", filename, error)
@@ -134,13 +111,13 @@ class YOLOValidator:
                 self._logger.debug("[%s] %s", filename, error)
                 return ValidationResult(is_valid=False, error=error)
 
-        return ValidationResult(is_valid=True)
+        return ValidationResult(is_valid=True, class_ids=parsed_class_ids)
 
 
 class ImageValidator:
     """Validate image bytes for integrity, dimensions, and supported formats."""
 
-    SUPPORTED_FORMATS: frozenset[str] = frozenset({"JPEG", "PNG"})
+    SUPPORTED_FORMATS: frozenset[str] = frozenset({"JPEG"})
 
     def __init__(self) -> None:
         self._logger = get_phototrap_logger().get_logger(
@@ -182,33 +159,7 @@ class ImageValidator:
             error = "Cannot identify image file"
             self._logger.debug("[%s] %s", filename, error)
             return ValidationResult(is_valid=False, error=error)
-        except Exception as exc:  # noqa: BLE001 - capture PIL/runtime issues as validation failure
+        except (OSError, ValueError, SyntaxError) as exc:
             error = f"Corrupted image: {exc}"
             self._logger.debug("[%s] %s", filename, error)
             return ValidationResult(is_valid=False, error=error)
-
-
-class FilenameValidator:
-    """Validate camera-trap filename parseability using FilenameParser."""
-
-    def __init__(self) -> None:
-        self._logger = get_phototrap_logger().get_logger(
-            LogCategory.PREPROCESSING, "filename_validator"
-        )
-
-    def validate(self, filename: str, labeled: bool = False) -> ValidationResult:
-        """
-        Validate filename parseability against ETL naming rules.
-
-        Args:
-            filename: Filename to validate.
-            labeled: Whether the file belongs to the labeled split.
-
-        Returns:
-            Validation result with parser error when invalid.
-        """
-        metadata = FilenameParser.parse(filename, labeled)
-        if not metadata.parse_success:
-            self._logger.debug("[%s] %s", filename, metadata.parse_error)
-            return ValidationResult(is_valid=False, error=metadata.parse_error)
-        return ValidationResult(is_valid=True)
