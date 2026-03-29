@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 
+# ------------------------------------------------------------------
+# Data Model
+# ------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class ClassCatalog:
@@ -17,6 +20,10 @@ class ClassCatalog:
     # Mapping from source class id (classes.txt index) to canonical train class id.
     source_to_train_class_id: Mapping[int, int]
 
+
+# ------------------------------------------------------------------
+# Public API
+# ------------------------------------------------------------------
 
 def load_class_catalog(classes_file: Path, train_species: tuple[str, ...]) -> ClassCatalog:
     """

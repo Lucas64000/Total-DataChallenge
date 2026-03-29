@@ -9,8 +9,11 @@ from threading import Lock
 
 from pipeline.etl.config import PreprocessingConfig
 from pipeline.etl.extractor.data_models import ExtractionStats, FileData, FilePair
-from pipeline.etl.extractor.validators import ImageValidator, ValidationResult, YOLOValidator
+from pipeline.etl.extractor.validators import ImageValidator, YOLOValidator
 
+# ------------------------------------------------------------------
+# Extraction Writer
+# ------------------------------------------------------------------
 
 class ExtractionWriter:
     """Persist extracted files and update shared stats safely."""
@@ -50,6 +53,10 @@ class ExtractionWriter:
         self._yolo_validator = yolo_validator
         self._move_invalid = move_invalid
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def write_unlabeled_image(self, image: FileData) -> None:
         """
         Validate and write one unlabeled image to the output directory.
@@ -73,7 +80,7 @@ class ExtractionWriter:
             self._logger.warning(
                 "Invalid unlabeled image %s: %s", image.name, result.error
             )
-            self._quarantine_invalid_unlabeled(image_bytes, image, result.error or "")
+            self._quarantine_invalid_unlabeled(image_bytes, image)
             self._inc("invalid_unlabeled")
             return
 
@@ -129,9 +136,7 @@ class ExtractionWriter:
             self._logger.warning(
                 "Invalid image %s: %s", pair.image.name, image_result.error
             )
-            self._quarantine_invalid_labeled(
-                image_bytes, annotation_bytes, pair, image_result.error or ""
-            )
+            self._quarantine_invalid_labeled(image_bytes, annotation_bytes, pair)
             self._inc("invalid_labeled")
             return
 
@@ -147,9 +152,7 @@ class ExtractionWriter:
                     pair.annotation.name,
                     annotation_result.error,
                 )
-                self._quarantine_invalid_labeled(
-                    image_bytes, annotation_bytes, pair, annotation_result.error or ""
-                )
+                self._quarantine_invalid_labeled(image_bytes, annotation_bytes, pair)
                 self._inc("invalid_labeled")
                 return
 
@@ -239,6 +242,10 @@ class ExtractionWriter:
         dest = self._config.paths.classes_file
         # Parent folders are created by config.ensure_dirs() before extraction starts.
         dest.write_bytes(content)
+
+    # ------------------------------------------------------------------
+    # Internal Helpers
+    # ------------------------------------------------------------------
 
     def _write_orphan_file(self, file_data: FileData, destination: Path) -> None:
         """
@@ -339,7 +346,6 @@ class ExtractionWriter:
         image_bytes: bytes,
         annotation_bytes: bytes,
         pair: FilePair,
-        reason: str,
     ) -> None:
         """
         Persist an invalid labeled pair to ``backup/invalid``.
@@ -350,7 +356,6 @@ class ExtractionWriter:
             image_bytes: Already-read image content.
             annotation_bytes: Already-read annotation content.
             pair: The source file pair (must have both image and annotation).
-            reason: Human-readable rejection reason for logs.
         """
         if not self._move_invalid or not self._config.backup_enabled:
             return
@@ -369,7 +374,6 @@ class ExtractionWriter:
         self,
         image_bytes: bytes,
         image: FileData,
-        reason: str,
     ) -> None:
         """
         Persist an invalid unlabeled image to ``backup/invalid/unlabeled``.
@@ -377,7 +381,6 @@ class ExtractionWriter:
         Args:
             image_bytes: Already-read image content.
             image: Source file descriptor.
-            reason: Human-readable rejection reason for logs.
         """
         if not self._move_invalid or not self._config.backup_enabled:
             return

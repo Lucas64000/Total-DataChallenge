@@ -17,6 +17,9 @@ from pipeline.etl.transform.filename_parser import detect_camera_type
 from utils.logging_system import LogCategory, get_phototrap_logger
 from utils.types import CameraType
 
+# ------------------------------------------------------------------
+# Result Helpers
+# ------------------------------------------------------------------
 
 def _build_error_result(
     camera_type: CameraType,
@@ -42,6 +45,10 @@ def _build_error_result(
         error=error,
     )
 
+
+# ------------------------------------------------------------------
+# Timestamp Extractor
+# ------------------------------------------------------------------
 
 class TimestampExtractor:
     """
@@ -82,6 +89,10 @@ class TimestampExtractor:
         else:
             self._logger.info("Initializing TrOCR engine (GPU=%s)", gpu)
             self._ocr_engine = TrOCREngine(gpu=gpu)
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def extract(
         self,
@@ -255,6 +266,10 @@ class TimestampExtractor:
         )
 
         return final_results
+
+    # ------------------------------------------------------------------
+    # Internal Helpers
+    # ------------------------------------------------------------------
 
     def _process_batch(
         self,

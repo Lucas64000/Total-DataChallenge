@@ -10,6 +10,9 @@ from PIL import Image
 
 from utils.types import CameraType
 
+# ------------------------------------------------------------------
+# Result Models
+# ------------------------------------------------------------------
 
 @dataclass(slots=True)
 class TimestampResult:
@@ -27,6 +30,10 @@ class TimestampResult:
     success: bool = False
     error: str | None = None
 
+
+# ------------------------------------------------------------------
+# OCR Protocols
+# ------------------------------------------------------------------
 
 class OCREngineProtocol(Protocol):
     """Protocol for OCR engine implementations."""

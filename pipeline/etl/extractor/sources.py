@@ -9,6 +9,9 @@ from pathlib import Path
 from pipeline.etl.config import IMAGE_EXTENSIONS
 from pipeline.etl.extractor.data_models import FileData, FilePair, LabelizedScanResult
 
+# ------------------------------------------------------------------
+# Source Scanner
+# ------------------------------------------------------------------
 
 class SourceScanner:
     """Scan filesystem and ZIP sources into ETL extraction models."""
@@ -21,6 +24,10 @@ class SourceScanner:
             logger: Module logger used for scan warnings and progress.
         """
         self._logger = logger
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def scan_unlabeled_sources(self, root: Path) -> list[FileData]:
         """
@@ -135,6 +142,10 @@ class SourceScanner:
         except zipfile.BadZipFile:
             self._logger.error("Invalid ZIP: %s", zip_path)
         return None
+
+    # ------------------------------------------------------------------
+    # Internal Helpers
+    # ------------------------------------------------------------------
 
     def _scan_unlabeled_directory(self, root: Path) -> list[FileData]:
         """

@@ -6,6 +6,9 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# ------------------------------------------------------------------
+# Extraction Statistics
+# ------------------------------------------------------------------
 
 @dataclass(slots=True)
 class ExtractionStats:
@@ -25,6 +28,10 @@ class ExtractionStats:
     invalid_labeled: int = 0
     invalid_unlabeled: int = 0
 
+
+# ------------------------------------------------------------------
+# Source File References
+# ------------------------------------------------------------------
 
 @dataclass
 class FileData:
@@ -107,6 +114,10 @@ class FileData:
         entry = Path(entry_name)
         return cls(stem=entry.stem, name=entry.name, _zip_source=(zip_path, entry_name))
 
+
+# ------------------------------------------------------------------
+# Pairing Models
+# ------------------------------------------------------------------
 
 @dataclass
 class FilePair:

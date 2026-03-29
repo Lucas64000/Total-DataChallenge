@@ -18,6 +18,9 @@ from dataclasses import dataclass
 
 from utils.types import BBox, CameraType, TimestampGroupOrder
 
+# ------------------------------------------------------------------
+# Profile Models
+# ------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class CropRegion:
@@ -101,6 +104,10 @@ class CameraProfile(ABC):
         ...
 
 
+# ------------------------------------------------------------------
+# Regex Patterns
+# ------------------------------------------------------------------
+
 # Regex building blocks.
 # Camera overlays may use ":" or "." between time fields (OCR can misread ":" as ".").
 _STRICT_SEP = r"[:.]"
@@ -125,6 +132,10 @@ _EU_NOSEP_PATTERN = re.compile(
 _ISO_ORDER: TimestampGroupOrder = (0, 1, 2, 3, 4, 5)  # y, m, d, h, min, sec
 _EU_ORDER: TimestampGroupOrder = (2, 1, 0, 3, 4, 5)   # d, m, y in regex -> y, m, d in output
 
+
+# ------------------------------------------------------------------
+# Concrete Profiles
+# ------------------------------------------------------------------
 
 class ReconyxProfile(CameraProfile):
     """
@@ -266,6 +277,10 @@ class UnknownProfile(CameraProfile):
         ]
 
 
+# ------------------------------------------------------------------
+# Registry
+# ------------------------------------------------------------------
+
 # Singleton profile registry reused for every extraction call.
 _PROFILES: dict[CameraType, CameraProfile] = {
     "reconyx": ReconyxProfile(),
@@ -273,6 +288,10 @@ _PROFILES: dict[CameraType, CameraProfile] = {
     "unknown": UnknownProfile(),
 }
 
+
+# ------------------------------------------------------------------
+# Public API
+# ------------------------------------------------------------------
 
 def get_profile(camera_type: CameraType) -> CameraProfile:
     """

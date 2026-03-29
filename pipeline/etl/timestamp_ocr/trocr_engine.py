@@ -8,6 +8,9 @@ from PIL import Image
 
 from pipeline.etl.timestamp_ocr.data_models import OCREngineProtocol
 
+# ------------------------------------------------------------------
+# TrOCR Engine
+# ------------------------------------------------------------------
 
 class TrOCREngine(OCREngineProtocol):
     """
@@ -34,6 +37,10 @@ class TrOCREngine(OCREngineProtocol):
         self._device = "cuda" if gpu and torch.cuda.is_available() else "cpu"
         self._model = self._model.to(self._device)
         self._model.eval()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def read(self, image: Image.Image) -> str:
         """

@@ -9,6 +9,9 @@ from PIL import Image, UnidentifiedImageError
 
 from utils.logging_system import LogCategory, get_phototrap_logger
 
+# ------------------------------------------------------------------
+# Validation Models
+# ------------------------------------------------------------------
 
 @dataclass
 class ValidationResult:
@@ -18,6 +21,10 @@ class ValidationResult:
     error: str | None = None
     class_ids: list[int] | None = None
 
+
+# ------------------------------------------------------------------
+# YOLO Annotation Validator
+# ------------------------------------------------------------------
 
 class YOLOValidator:
     """Validate YOLO annotation syntax and normalized geometry bounds."""
@@ -41,6 +48,10 @@ class YOLOValidator:
         self._logger = get_phototrap_logger().get_logger(
             LogCategory.PREPROCESSING, "yolo_validator"
         )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def validate(self, content: str, filename: str = "") -> ValidationResult:
         """
@@ -113,6 +124,10 @@ class YOLOValidator:
 
         return ValidationResult(is_valid=True, class_ids=parsed_class_ids)
 
+
+# ------------------------------------------------------------------
+# Image Validator
+# ------------------------------------------------------------------
 
 class ImageValidator:
     """Validate image bytes for integrity, dimensions, and supported formats."""

@@ -17,6 +17,10 @@ from pipeline.etl.extractor.validators import ImageValidator, YOLOValidator
 from pipeline.etl.extractor.writer import ExtractionWriter
 from utils.logging_system import LogCategory, get_phototrap_logger
 
+# ------------------------------------------------------------------
+# Extractor Orchestration
+# ------------------------------------------------------------------
+
 
 class Extractor:
     """
@@ -57,14 +61,16 @@ class Extractor:
         self._num_workers = min(resolved_workers, 16)
         self._skip_existing = skip_existing
         self._move_invalid = move_invalid
-        self._logger = get_phototrap_logger().get_logger(
-            LogCategory.PREPROCESSING, "extractor"
-        )
+        self._logger = get_phototrap_logger().get_logger(LogCategory.PREPROCESSING, "extractor")
         self._stats = ExtractionStats()
         self._stats_lock = Lock()
         self._scanner = SourceScanner(self._logger)
         self._image_validator = ImageValidator()
         self._yolo_validator: YOLOValidator | None = None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def extract(self) -> ExtractionStats:
         """
@@ -82,6 +88,10 @@ class Extractor:
 
         self._log_summary()
         return self._stats
+
+    # ------------------------------------------------------------------
+    # Internal Helpers
+    # ------------------------------------------------------------------
 
     def _make_writer(self) -> ExtractionWriter:
         """
@@ -130,7 +140,9 @@ class Extractor:
         pairs_list = sorted(file_pairs.values(), key=lambda pair: pair.stem)
         with ThreadPoolExecutor(max_workers=self._num_workers) as executor:
             # Keep future -> pair map to report precise failures from worker threads.
-            futures = {executor.submit(self._process_pair, writer, pair): pair for pair in pairs_list}
+            futures = {
+                executor.submit(self._process_pair, writer, pair): pair for pair in pairs_list
+            }
             for future in tqdm(
                 as_completed(futures),
                 total=len(futures),
@@ -162,7 +174,7 @@ class Extractor:
         images = self._scanner.scan_unlabeled_sources(source_unlabelized)
         self._logger.info("Found %d unlabelized images", len(images))
 
-        # Keep unlabeled extraction sequential for now: simpler control flow and
+        # Unlabeled extraction sequential:
         # deterministic handling when multiple files share the same filename.
         for image in tqdm(images, desc="Extracting unlabelized", unit="image"):
             try:
@@ -215,9 +227,7 @@ class Extractor:
             return
 
         self._yolo_validator = YOLOValidator(classes=list(catalog.source_classes))
-        self._logger.info(
-            "YOLO validator ready: %d classes", self._yolo_validator.num_classes
-        )
+        self._logger.info("YOLO validator ready: %d classes", self._yolo_validator.num_classes)
 
     @staticmethod
     def _process_pair(writer: ExtractionWriter, pair: FilePair) -> None:
@@ -255,7 +265,3 @@ class Extractor:
             self._stats.skipped_existing,
             self._stats.extraction_errors,
         )
-
-
-if __name__ == "__main__":
-    Extractor().extract()
