@@ -9,21 +9,9 @@ from pathlib import Path
 from pipeline.etl.config import IMAGE_EXTENSIONS
 from pipeline.etl.extractor.data_models import FileData, FilePair, LabelizedScanResult
 
-
-def find_classes_file(root: Path) -> Path | None:
-    """
-    Find the first ``classes.txt`` file under a root directory.
-
-    Args:
-        root: Root directory to search recursively.
-
-    Returns:
-        Path to the first matching file in deterministic order, or ``None``.
-    """
-    for path in sorted(root.rglob("classes.txt"), key=lambda p: p.as_posix()):
-        return path
-    return None
-
+# ------------------------------------------------------------------
+# Source Scanner
+# ------------------------------------------------------------------
 
 class SourceScanner:
     """Scan filesystem and ZIP sources into ETL extraction models."""
@@ -36,6 +24,10 @@ class SourceScanner:
             logger: Module logger used for scan warnings and progress.
         """
         self._logger = logger
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def scan_unlabeled_sources(self, root: Path) -> list[FileData]:
         """
@@ -50,11 +42,12 @@ class SourceScanner:
         images: list[FileData] = []
 
         for item in sorted(root.iterdir(), key=lambda p: p.name):
-            if item.suffix.lower() == ".zip":
+            # Support mixed roots where direct files, folders, and ZIPs coexist.
+            if item.suffix.lower() == ".zip" and not item.stem.startswith("."):
                 images.extend(self._scan_unlabeled_zip(item))
             elif item.is_dir():
                 images.extend(self._scan_unlabeled_directory(item))
-            elif item.suffix.lower() in IMAGE_EXTENSIONS:
+            elif item.suffix.lower() in IMAGE_EXTENSIONS and not item.stem.startswith("."):
                 images.append(FileData.from_path(item))
 
         return images
@@ -67,14 +60,15 @@ class SourceScanner:
             root: Root directory containing labeled assets.
 
         Returns:
-            Structured scan result with canonical pairs and duplicates.
+            Structured scan result with canonical pairs and duplicate extras.
+            A duplicate means "same stem, different source path/ZIP entry".
         """
         pairs: dict[str, FilePair] = {}
         duplicate_images: list[FileData] = []
         duplicate_annotations: list[FileData] = []
 
         for item in sorted(root.iterdir(), key=lambda p: p.name):
-            if item.suffix.lower() == ".zip":
+            if item.suffix.lower() == ".zip" and not item.stem.startswith("."):
                 self._scan_zip(item, pairs, duplicate_images, duplicate_annotations)
             elif item.is_dir():
                 self._scan_directory(item, pairs, duplicate_images, duplicate_annotations)
@@ -86,11 +80,49 @@ class SourceScanner:
                     duplicate_annotations,
                 )
 
+        # Each FilePair in the map must have at least one file:
+        # _register_file always sets image or annotation before returning.
+        empty_stems = [
+            stem for stem, pair in pairs.items() if pair.image is None and pair.annotation is None
+        ]
+        if empty_stems:
+            raise RuntimeError(
+                f"SourceScanner produced {len(empty_stems)} empty FilePair(s) "
+                f"(stems: {empty_stems[:5]}{'...' if len(empty_stems) > 5 else ''}). "
+                "This is a bug in _register_file."
+            )
+
         return LabelizedScanResult(
             pairs=pairs,
             duplicate_images=duplicate_images,
             duplicate_annotations=duplicate_annotations,
         )
+
+    def find_classes_content(self, root: Path) -> tuple[bytes, str] | None:
+        """
+        Find and read the first ``classes.txt`` content under a root tree.
+
+        Searches both regular files and ZIP archives in deterministic order.
+
+        Args:
+            root: Root directory to scan recursively.
+
+        Returns:
+            Tuple ``(content, source_hint)`` or ``None`` when not found.
+        """
+        for path in sorted(root.rglob("*"), key=lambda p: p.as_posix()):
+            if not path.is_file():
+                continue
+
+            if path.name == "classes.txt":
+                return path.read_bytes(), str(path)
+
+            if path.suffix.lower() == ".zip":
+                zip_content = self.find_classes_in_zip(path)
+                if zip_content:
+                    return zip_content, str(path)
+
+        return None
 
     def find_classes_in_zip(self, zip_path: Path) -> bytes | None:
         """
@@ -110,6 +142,10 @@ class SourceScanner:
         except zipfile.BadZipFile:
             self._logger.error("Invalid ZIP: %s", zip_path)
         return None
+
+    # ------------------------------------------------------------------
+    # Internal Helpers
+    # ------------------------------------------------------------------
 
     def _scan_unlabeled_directory(self, root: Path) -> list[FileData]:
         """
@@ -181,6 +217,8 @@ class SourceScanner:
         Args:
             root: Directory to scan.
             pairs: Mutable stem map populated in place.
+            duplicate_images: Collector for duplicate image references, or ``None`` to discard.
+            duplicate_annotations: Collector for duplicate annotation references, or ``None`` to discard.
         """
         for file_path in sorted(root.rglob("*"), key=lambda p: p.as_posix()):
             if not file_path.is_file():
@@ -190,6 +228,7 @@ class SourceScanner:
             stem = file_path.stem
 
             if stem.startswith(".") or stem == "classes":
+                # Hidden artifacts and classes metadata are not trainable samples.
                 continue
 
             if suffix == ".zip":
@@ -260,6 +299,8 @@ class SourceScanner:
         Args:
             pairs: Mutable stem map populated in place.
             file_data: Candidate file reference.
+            duplicate_images: Collector for duplicate image references, or ``None`` to discard.
+            duplicate_annotations: Collector for duplicate annotation references, or ``None`` to discard.
         """
         suffix = Path(file_data.name).suffix.lower()
         stem = file_data.stem
@@ -276,6 +317,7 @@ class SourceScanner:
             if pair.image is None:
                 pair.image = file_data
             else:
+                # First occurrence wins; later duplicates are tracked for quarantine/reporting.
                 self._logger.warning(
                     "Duplicate image stem '%s' detected. Keeping first source '%s', skipping '%s'.",
                     stem,
@@ -288,6 +330,7 @@ class SourceScanner:
             if pair.annotation is None:
                 pair.annotation = file_data
             else:
+                # Same policy for annotations: stable canonical pair + explicit duplicate capture.
                 self._logger.warning(
                     "Duplicate annotation stem '%s' detected. Keeping first source '%s', skipping '%s'.",
                     stem,

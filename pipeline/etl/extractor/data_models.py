@@ -6,6 +6,9 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# ------------------------------------------------------------------
+# Extraction Statistics
+# ------------------------------------------------------------------
 
 @dataclass(slots=True)
 class ExtractionStats:
@@ -22,7 +25,13 @@ class ExtractionStats:
     duplicate_unlabeled_images: int = 0
     skipped_existing: int = 0
     extraction_errors: int = 0
+    invalid_labeled: int = 0
+    invalid_unlabeled: int = 0
 
+
+# ------------------------------------------------------------------
+# Source File References
+# ------------------------------------------------------------------
 
 @dataclass
 class FileData:
@@ -53,6 +62,7 @@ class FileData:
         if self._source_path is not None:
             return self._source_path.read_bytes()
         if self._zip_source is not None:
+            # Open ZIP lazily at read time to keep scan phase lightweight.
             zip_path, entry_name = self._zip_source
             with zipfile.ZipFile(zip_path, "r") as zf:
                 return zf.read(entry_name)
@@ -104,6 +114,10 @@ class FileData:
         entry = Path(entry_name)
         return cls(stem=entry.stem, name=entry.name, _zip_source=(zip_path, entry_name))
 
+
+# ------------------------------------------------------------------
+# Pairing Models
+# ------------------------------------------------------------------
 
 @dataclass
 class FilePair:

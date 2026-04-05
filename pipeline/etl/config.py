@@ -3,16 +3,23 @@ Define ETL path and preprocessing configuration objects.
 
 This module contains dataclasses used by extraction and validation stages:
 - source/output/backup directory layout
-- preprocessing toggles (dry-run, orphan policy, backups)
+- preprocessing toggles (dry-run, backups)
 - helper methods to create required directory structures
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
-IMAGE_EXTENSIONS: frozenset[str] = frozenset((".jpg", ".jpeg", ".png"))
+# ------------------------------------------------------------------
+# Constants
+# ------------------------------------------------------------------
+
+IMAGE_EXTENSIONS: frozenset[str] = frozenset((".jpg", ".jpeg"))
+
+DEFAULT_DEDUP_WINDOW_SECONDS: int = 5
 
 LABELED_SPECIES: tuple[str, ...] = (
     "Ardea-cinerea",
@@ -26,6 +33,10 @@ LABELED_SPECIES: tuple[str, ...] = (
 )
 
 
+# ------------------------------------------------------------------
+# Path Configuration
+# ------------------------------------------------------------------
+
 @dataclass
 class PathConfig:
     """Paths configuration."""
@@ -36,6 +47,7 @@ class PathConfig:
 
     def __post_init__(self) -> None:
         """Normalize user-provided path-like values into ``Path`` objects."""
+        # Accept both strings and Path objects from CLI/tests/config files.
         self.source_dir = Path(self.source_dir)
         self.output_dir = Path(self.output_dir)
         self.backup_dir = Path(self.backup_dir)
@@ -81,6 +93,16 @@ class PathConfig:
         return self.output_dir / "metadata.csv"
 
     @property
+    def dataframe_dedup_output(self) -> Path:
+        """
+        Return the default deduplicated metadata CSV output path.
+
+        Returns:
+            Path to ``data/metadata_dedup.csv``.
+        """
+        return self.output_dir / "metadata_dedup.csv"
+
+    @property
     def classes_file(self) -> Path:
         """
         Return the canonical ``classes.txt`` path.
@@ -91,25 +113,40 @@ class PathConfig:
         return self.output_dir / "labelized" / "classes.txt"
 
     def ensure_output_dirs(self) -> None:
-        """
-        Create output directory structure.
-
-        Returns:
-            ``None``.
-        """
+        """Create output directory structure."""
         self.labelized_images.mkdir(parents=True, exist_ok=True)
         self.labelized_annotations.mkdir(parents=True, exist_ok=True)
         self.unlabeled.mkdir(parents=True, exist_ok=True)
 
+
+# ------------------------------------------------------------------
+# Timestamp Configuration
+# ------------------------------------------------------------------
+
+@dataclass(slots=True)
+class TimestampSettings:
+    """Timestamp parsing constraints used by OCR extraction."""
+
+    min_year: int = 2015
+
+    @property
+    def max_year(self) -> int:
+        """Return dynamic upper bound for accepted timestamp years."""
+        return datetime.now().year + 1
+
+
+# ------------------------------------------------------------------
+# ETL Configuration
+# ------------------------------------------------------------------
 
 @dataclass
 class PreprocessingConfig:
     """Main configuration for ETL pipeline."""
 
     paths: PathConfig = field(default_factory=PathConfig)
+    timestamp: TimestampSettings = field(default_factory=TimestampSettings)
     dry_run: bool = False
     backup_enabled: bool = True
-    fail_on_orphans: bool = True
 
     @property
     def backup_dir(self) -> Path:
@@ -152,15 +189,12 @@ class PreprocessingConfig:
         return self.backup_dir / "orphans"
 
     def ensure_dirs(self) -> None:
-        """
-        Create all required ETL directories.
-
-        Returns:
-            ``None``.
-        """
+        """Create all required ETL directories."""
         if not self.dry_run:
+            # Output folders are always required for extraction/validation artifacts.
             self.paths.ensure_output_dirs()
             if self.backup_enabled:
+                # Keep labeled and unlabeled quarantine trees separated for easier audits.
                 for subdir in ["invalid", "orphans"]:
                     (self.backup_dir / subdir / "images").mkdir(parents=True, exist_ok=True)
                     (self.backup_dir / subdir / "annotations").mkdir(parents=True, exist_ok=True)
