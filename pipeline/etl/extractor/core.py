@@ -82,6 +82,12 @@ class Extractor:
         self._stats = ExtractionStats()
         self._config.ensure_dirs()
 
+        # Copy classes.txt and load the YOLO validator before creating the writer
+        source_labelized = self._config.paths.source_dir / "labelized"
+        if source_labelized.exists():
+            self._copy_classes_file(source_labelized)
+            self._load_yolo_validator()
+
         writer = self._make_writer()
         self._extract_labelized(writer)
         self._extract_unlabelized(writer)
@@ -125,8 +131,6 @@ class Extractor:
 
         self._logger.info("Extracting labelized from: %s", source_labelized)
 
-        self._copy_classes_file(source_labelized, writer)
-        self._load_yolo_validator()
         scan_result = self._scanner.scan_labelized_sources(source_labelized)
         file_pairs = scan_result.pairs
         # Duplicates are quarantined immediately and excluded from main extraction flow.
@@ -184,18 +188,18 @@ class Extractor:
                 with self._stats_lock:
                     self._stats.extraction_errors += 1
 
-    def _copy_classes_file(self, root: Path, writer: ExtractionWriter) -> None:
+    def _copy_classes_file(self, root: Path) -> None:
         """
         Copy ``classes.txt`` discovered by the source scanner.
 
         Args:
             root: Labeled source root.
-            writer: Writer used to persist ``classes.txt``.
         """
         classes_payload = self._scanner.find_classes_content(root)
         if classes_payload is not None:
             content, source_hint = classes_payload
-            writer.write_classes_file(content)
+            if not self._config.dry_run:
+                self._config.paths.classes_file.write_bytes(content)
             self._logger.info("Copied classes.txt from %s", source_hint)
             return
 
