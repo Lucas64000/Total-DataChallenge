@@ -22,6 +22,7 @@ from utils.types import BBox, CameraType, TimestampGroupOrder
 # Profile Models
 # ------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class CropRegion:
     """Crop region parameters as ratios of image dimensions."""
@@ -122,20 +123,17 @@ _EU_PATTERN = re.compile(
 
 # Fallback patterns for cases where OCR drops separators in HH:MM:SS.
 # `(?!\d)` avoids partial matches inside longer digit runs.
-_ISO_NOSEP_PATTERN = re.compile(
-    r"(\d{4})-(\d{2})-(\d{2})\s+(\d{2})(\d{2})(\d{2})(?!\d)"
-)
-_EU_NOSEP_PATTERN = re.compile(
-    r"(\d{2})-(\d{2})-(\d{4})\s+(\d{2})(\d{2})(\d{2})(?!\d)"
-)
+_ISO_NOSEP_PATTERN = re.compile(r"(\d{4})-(\d{2})-(\d{2})\s+(\d{2})(\d{2})(\d{2})(?!\d)")
+_EU_NOSEP_PATTERN = re.compile(r"(\d{2})-(\d{2})-(\d{4})\s+(\d{2})(\d{2})(\d{2})(?!\d)")
 
 _ISO_ORDER: TimestampGroupOrder = (0, 1, 2, 3, 4, 5)  # y, m, d, h, min, sec
-_EU_ORDER: TimestampGroupOrder = (2, 1, 0, 3, 4, 5)   # d, m, y in regex -> y, m, d in output
+_EU_ORDER: TimestampGroupOrder = (2, 1, 0, 3, 4, 5)  # d, m, y in regex -> y, m, d in output
 
 
 # ------------------------------------------------------------------
 # Concrete Profiles
 # ------------------------------------------------------------------
+
 
 class ReconyxProfile(CameraProfile):
     """
@@ -143,7 +141,6 @@ class ReconyxProfile(CameraProfile):
 
     - Timestamp location: top-left corner
     - Format: ISO (YYYY-MM-DD HH:MM:SS)
-    - Crop: (0, 0) to (40% width, 3% height)
     """
 
     @property
@@ -165,7 +162,7 @@ class ReconyxProfile(CameraProfile):
             Ratio-based crop region.
         """
         # Tuned in notebooks/etl/03_ocr_calibration.ipynb for Reconyx overlays.
-        return CropRegion(x_start=0.0, y_start=0.0, x_end=0.35, y_end=0.03)
+        return CropRegion(x_start=0.0145, y_start=0.0000, x_end=0.3220, y_end=0.0340)
 
     @property
     def patterns(self) -> list[TimestampPattern]:
@@ -189,7 +186,6 @@ class BolyProfile(CameraProfile):
     - Formats: BOTH ISO and EU observed in the wild
       - ISO: YYYY-MM-DD HH:MM:SS (e.g., 2016-05-28 09:39:54)
       - EU:  DD-MM-YYYY HH:MM:SS (e.g., 22-02-2016 19:20:39)
-    - Crop: (35% width, 95% height) to (100%, 100%)
     """
 
     @property
@@ -211,7 +207,7 @@ class BolyProfile(CameraProfile):
             Ratio-based crop region.
         """
         # Tuned in notebooks/etl/03_ocr_calibration.ipynb for Boly overlays.
-        return CropRegion(x_start=0.45, y_start=0.96, x_end=1.0, y_end=1.0)
+        return CropRegion(x_start=0.4697, y_start=0.9359, x_end=1.0000, y_end=1.0000)
 
     @property
     def patterns(self) -> list[TimestampPattern]:
@@ -223,9 +219,9 @@ class BolyProfile(CameraProfile):
         """
         # Order matters: ISO first (most frequent), then EU fallbacks.
         return [
-            TimestampPattern(_ISO_PATTERN, _ISO_ORDER),      # ISO with explicit separators.
+            TimestampPattern(_ISO_PATTERN, _ISO_ORDER),  # ISO with explicit separators.
             TimestampPattern(_ISO_NOSEP_PATTERN, _ISO_ORDER),
-            TimestampPattern(_EU_PATTERN, _EU_ORDER),        # EU with explicit separators.
+            TimestampPattern(_EU_PATTERN, _EU_ORDER),  # EU with explicit separators.
             TimestampPattern(_EU_NOSEP_PATTERN, _EU_ORDER),
         ]
 
@@ -292,6 +288,7 @@ _PROFILES: dict[CameraType, CameraProfile] = {
 # ------------------------------------------------------------------
 # Public API
 # ------------------------------------------------------------------
+
 
 def get_profile(camera_type: CameraType) -> CameraProfile:
     """

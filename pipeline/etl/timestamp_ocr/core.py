@@ -21,6 +21,7 @@ from utils.types import CameraType
 # Result Helpers
 # ------------------------------------------------------------------
 
+
 def _build_error_result(
     camera_type: CameraType,
     error: str,
@@ -49,6 +50,7 @@ def _build_error_result(
 # ------------------------------------------------------------------
 # Timestamp Extractor
 # ------------------------------------------------------------------
+
 
 class TimestampExtractor:
     """
@@ -94,6 +96,41 @@ class TimestampExtractor:
     # Public API
     # ------------------------------------------------------------------
 
+    def _resolve_profiles(self, camera_type: CameraType) -> list[CameraProfile]:
+        """
+        Resolve OCR profiles for a detected camera type.
+
+        Unknown camera IDs are evaluated with both Reconyx and Boly profiles.
+        """
+        if camera_type == "unknown":
+            return [get_profile("reconyx"), get_profile("boly")]
+        return [get_profile(camera_type)]
+
+    def _extract_unknown_with_dual_profiles(self, image_path: Path) -> TimestampResult:
+        """
+        Evaluate unknown camera images with both calibrated profile candidates.
+
+        Returns the first successful parse in priority order
+        (Reconyx, then Boly). If all attempts fail, returns a consolidated
+        failure containing both OCR outputs when available.
+        """
+        attempts = [
+            self._extract_impl(image_path, "unknown", profile)
+            for profile in self._resolve_profiles("unknown")
+        ]
+
+        for result in attempts:
+            if result.success:
+                return result
+
+        raw_texts = [result.raw_text for result in attempts if result.raw_text]
+        merged_raw = " | ".join(raw_texts) if raw_texts else None
+        return _build_error_result(
+            camera_type="unknown",
+            raw_text=merged_raw,
+            error="Could not parse timestamp with unknown candidates (reconyx + boly)",
+        )
+
     def extract(
         self,
         image_path: Path | str,
@@ -115,8 +152,11 @@ class TimestampExtractor:
         resolved_type: CameraType = (
             camera_type if camera_type is not None else detect_camera_type(image_path.name)
         )
+        if resolved_type == "unknown":
+            return self._extract_unknown_with_dual_profiles(image_path)
+
         try:
-            profile = get_profile(resolved_type)
+            profile = self._resolve_profiles(resolved_type)[0]
         except KeyError:
             return _build_error_result(
                 camera_type="unknown",
@@ -172,6 +212,7 @@ class TimestampExtractor:
                 success=True,
             )
 
+        self._logger.debug("Could not parse timestamp from raw OCR text: %r", raw_text)
         return _build_error_result(
             camera_type=camera_type,
             error=f"Could not parse timestamp from: {raw_text}",
@@ -233,11 +274,15 @@ class TimestampExtractor:
 
         # Keep index + metadata per image; index is used to write back deterministically.
         to_process: list[tuple[int, Path, CameraType, CameraProfile]] = []
+        unknown_items: list[tuple[int, Path]] = []
 
         for idx, image_path in enumerate(paths):
             camera_type = detect_camera_type(image_path.name)
+            if camera_type == "unknown":
+                unknown_items.append((idx, image_path))
+                continue
             # Profile lookup is done once per image and reused through batch processing.
-            profile = get_profile(camera_type)
+            profile = self._resolve_profiles(camera_type)[0]
             to_process.append((idx, image_path, camera_type, profile))
 
         if to_process:
@@ -253,6 +298,10 @@ class TimestampExtractor:
             for batch_start in iterator:
                 batch = to_process[batch_start : batch_start + batch_size]
                 self._process_batch(batch, results)
+
+        # Unknown camera images are evaluated with both candidate profiles.
+        for idx, image_path in unknown_items:
+            results[idx] = self.extract(image_path, camera_type="unknown")
 
         final_results: list[TimestampResult] = results  # type: ignore[assignment]
 
@@ -302,6 +351,10 @@ class TimestampExtractor:
 
         try:
             ocr_texts = self._ocr_engine.read_batch(crops)
+            if len(ocr_texts) != len(crops):
+                raise RuntimeError(
+                    f"OCR engine returned {len(ocr_texts)} texts for {len(crops)} crops"
+                )
         except (OSError, ValueError, RuntimeError) as exc:
             self._logger.warning("Batch OCR failed: %s", exc)
             for idx, _, camera_type, _ in valid_items:

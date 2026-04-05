@@ -11,16 +11,21 @@ from pipeline.etl.timestamp_ocr.camera_profiles import CameraProfile, TimestampP
 # ------------------------------------------------------------------
 
 # Apply only low-risk OCR substitutions seen on timestamp overlays.
-OCR_CHAR_MAP = str.maketrans({
-    "O": "0", "o": "0",
-    "l": "1", "I": "1",
-    "|": "1",
-})
+OCR_CHAR_MAP = str.maketrans(
+    {
+        "O": "0",
+        "o": "0",
+        "l": "1",
+        "I": "1",
+        "|": "1",
+    }
+)
 
 
 # ------------------------------------------------------------------
 # Public API
 # ------------------------------------------------------------------
+
 
 def normalize_ocr_text(text: str) -> str:
     """
@@ -41,6 +46,7 @@ def normalize_ocr_text(text: str) -> str:
 # ------------------------------------------------------------------
 # Internal Helpers
 # ------------------------------------------------------------------
+
 
 def _try_pattern(
     text: str,
@@ -90,6 +96,7 @@ def _try_pattern(
 # ------------------------------------------------------------------
 # Public API
 # ------------------------------------------------------------------
+
 
 def parse_timestamp(
     text: str,
