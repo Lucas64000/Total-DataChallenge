@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from pipeline.etl.config import PathConfig, PreprocessingConfig
+from pipeline.etl.config import PreprocessingConfig
 from pipeline.etl.extractor.core import Extractor
 from pipeline.etl.extractor.data_models import FileData, FilePair, LabelizedScanResult
 from pipeline.etl.extractor.sources import SourceScanner
@@ -28,17 +28,6 @@ class _FakePathEntry:
 
     def as_posix(self) -> str:
         return self.name
-
-
-def _build_config(root: Path) -> PreprocessingConfig:
-    """Build a test config rooted inside the per-test sandbox."""
-    return PreprocessingConfig(
-        paths=PathConfig(
-            source_dir=root / "source",
-            output_dir=root / "output",
-            backup_dir=root / "output" / "backup",
-        )
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -146,10 +135,12 @@ class TestSourceScannerIntegration:
 
 
 class TestExtractorLifecycle:
-    def test_extract_orchestrates_labelized_and_unlabelized_steps(self) -> None:
+    def test_extract_orchestrates_labelized_and_unlabelized_steps(
+        self, preprocessing_config: PreprocessingConfig
+    ) -> None:
         # num_workers=1 keeps the test deterministic (no thread pool) while still
         # exercising the full orchestration path.
-        extractor = Extractor(config=PreprocessingConfig(), num_workers=1, skip_existing=True)
+        extractor = Extractor(config=preprocessing_config, num_workers=1, skip_existing=True)
         # This test verifies call flow, not real file writes.
         with (
             patch.object(extractor._config, "ensure_dirs") as ensure_dirs,
@@ -168,15 +159,15 @@ class TestExtractorLifecycle:
         log_summary.assert_called_once()
         assert stats is extractor._stats
 
-    def test_rejects_non_positive_workers(self) -> None:
+    def test_rejects_non_positive_workers(self, preprocessing_config: PreprocessingConfig) -> None:
         with pytest.raises(ValueError, match="num_workers must be > 0"):
-            Extractor(config=PreprocessingConfig(), num_workers=0)
+            Extractor(config=preprocessing_config, num_workers=0)
 
         with pytest.raises(ValueError, match="num_workers must be > 0"):
-            Extractor(config=PreprocessingConfig(), num_workers=-1)
+            Extractor(config=preprocessing_config, num_workers=-1)
 
-    def test_num_workers_capped_at_16(self) -> None:
-        extractor = Extractor(config=PreprocessingConfig(), num_workers=32)
+    def test_num_workers_capped_at_16(self, preprocessing_config: PreprocessingConfig) -> None:
+        extractor = Extractor(config=preprocessing_config, num_workers=32)
         assert extractor._num_workers == 16
 
 
@@ -186,8 +177,10 @@ class TestExtractorLifecycle:
 
 
 class TestExtractUnlabelized:
-    def test_writes_all_images_even_with_same_name(self, sandbox: Path) -> None:
-        config = _build_config(sandbox)
+    def test_writes_all_images_even_with_same_name(
+        self, preprocessing_config: PreprocessingConfig
+    ) -> None:
+        config = preprocessing_config
         (config.paths.source_dir / "unlabelized").mkdir(parents=True, exist_ok=True)
         extractor = Extractor(config=config, num_workers=1, skip_existing=True)
         writer = MagicMock()
@@ -209,16 +202,21 @@ class TestExtractUnlabelized:
         # Keep scanner order for deterministic naming in downstream writer logic.
         assert written_hints == [duplicate.source_hint, other.source_hint, first.source_hint]
 
-    def test_returns_early_when_source_missing(self, sandbox: Path) -> None:
-        config = PreprocessingConfig(paths=PathConfig(source_dir=sandbox / "missing_source_dir"))
+    def test_returns_early_when_source_missing(
+        self, preprocessing_config: PreprocessingConfig
+    ) -> None:
+        config = preprocessing_config
+        config.paths.source_dir = config.paths.source_dir.parent / "missing_source_dir"
         extractor = Extractor(config=config, num_workers=1)
         writer = MagicMock()
         extractor._extract_unlabelized(writer)
         writer.write_unlabeled_image.assert_not_called()
 
-    def test_increments_errors_on_exception(self, sandbox: Path) -> None:
-        (sandbox / "source" / "unlabelized").mkdir(parents=True)
-        extractor = Extractor(config=_build_config(sandbox), num_workers=1)
+    def test_increments_errors_on_exception(
+        self, preprocessing_config: PreprocessingConfig
+    ) -> None:
+        (preprocessing_config.paths.source_dir / "unlabelized").mkdir(parents=True)
+        extractor = Extractor(config=preprocessing_config, num_workers=1)
         writer = MagicMock()
         writer.write_unlabeled_image.side_effect = RuntimeError("boom")
         with patch.object(
@@ -236,8 +234,10 @@ class TestExtractUnlabelized:
 
 
 class TestExtractLabelized:
-    def test_quarantines_duplicate_image_and_annotation(self, sandbox: Path) -> None:
-        config = _build_config(sandbox)
+    def test_quarantines_duplicate_image_and_annotation(
+        self, preprocessing_config: PreprocessingConfig
+    ) -> None:
+        config = preprocessing_config
         (config.paths.source_dir / "labelized").mkdir(parents=True, exist_ok=True)
         extractor = Extractor(config=config, num_workers=1, skip_existing=True)
         writer = MagicMock()
@@ -252,12 +252,8 @@ class TestExtractLabelized:
             duplicate_annotations=[FileData(stem="sample", name="sample.txt")],
         )
         # Duplicates are not extracted twice: they are quarantined for audit/debug.
-        with (
-            patch.object(extractor, "_copy_classes_file") as copy_classes,
-            patch.object(extractor._scanner, "scan_labelized_sources", return_value=scan_result),
-        ):
+        with patch.object(extractor._scanner, "scan_labelized_sources", return_value=scan_result):
             extractor._extract_labelized(writer)
-        copy_classes.assert_called_once()
         writer.extract_complete_pair.assert_called_once_with(pair)
         writer.quarantine_labelized_duplicate_image.assert_called_once_with(
             scan_result.duplicate_images[0]
@@ -266,16 +262,21 @@ class TestExtractLabelized:
             scan_result.duplicate_annotations[0]
         )
 
-    def test_returns_early_when_source_missing(self, sandbox: Path) -> None:
-        config = PreprocessingConfig(paths=PathConfig(source_dir=sandbox / "missing_source_dir"))
+    def test_returns_early_when_source_missing(
+        self, preprocessing_config: PreprocessingConfig
+    ) -> None:
+        config = preprocessing_config
+        config.paths.source_dir = config.paths.source_dir.parent / "missing_source_dir"
         extractor = Extractor(config=config, num_workers=1)
         writer = MagicMock()
         extractor._extract_labelized(writer)
         writer.extract_complete_pair.assert_not_called()
 
-    def test_increments_errors_on_worker_exception(self, sandbox: Path) -> None:
-        (sandbox / "source" / "labelized").mkdir(parents=True)
-        extractor = Extractor(config=_build_config(sandbox), num_workers=1)
+    def test_increments_errors_on_worker_exception(
+        self, preprocessing_config: PreprocessingConfig
+    ) -> None:
+        (preprocessing_config.paths.source_dir / "labelized").mkdir(parents=True)
+        extractor = Extractor(config=preprocessing_config, num_workers=1)
         writer = MagicMock()
         writer.extract_complete_pair.side_effect = RuntimeError("boom")
 
@@ -285,11 +286,7 @@ class TestExtractLabelized:
             annotation=FileData(stem="s", name="s.txt"),
         )
         scan_result = LabelizedScanResult(pairs={"s": pair})
-        with (
-            patch.object(extractor, "_copy_classes_file"),
-            patch.object(extractor, "_load_yolo_validator"),
-            patch.object(extractor._scanner, "scan_labelized_sources", return_value=scan_result),
-        ):
+        with patch.object(extractor._scanner, "scan_labelized_sources", return_value=scan_result):
             extractor._extract_labelized(writer)
         assert extractor._stats.extraction_errors == 1
 
@@ -300,27 +297,26 @@ class TestExtractLabelized:
 
 
 class TestCopyClassesFile:
-    def test_scans_nested_zip_locations(self, sandbox: Path) -> None:
-        config = _build_config(sandbox)
+    def test_scans_nested_zip_locations(self, preprocessing_config: PreprocessingConfig) -> None:
+        config = preprocessing_config
         labelized_root = config.paths.source_dir / "labelized"
         nested_zip = labelized_root / "subdir" / "batch.zip"
         nested_zip.parent.mkdir(parents=True, exist_ok=True)
         # Placeholder archive file to exercise recursive zip discovery.
         nested_zip.write_bytes(b"zip-placeholder")
+        config.paths.classes_file.parent.mkdir(parents=True, exist_ok=True)
 
         extractor = Extractor(config=config, num_workers=1, skip_existing=True)
-        writer = MagicMock()
         # classes.txt may live inside nested archives, not only as a loose file.
         with patch.object(
             extractor._scanner,
             "find_classes_in_zip",
             side_effect=lambda path: b"class_a\nclass_b\n" if path == nested_zip else None,
         ) as find_in_zip:
-            extractor._copy_classes_file(labelized_root, writer)
+            extractor._copy_classes_file(labelized_root)
 
-        # If classes are found in nested zip, writer must persist them once.
         find_in_zip.assert_called_once_with(nested_zip)
-        writer.write_classes_file.assert_called_once_with(b"class_a\nclass_b\n")
+        assert config.paths.classes_file.read_bytes() == b"class_a\nclass_b\n"
 
 
 # ---------------------------------------------------------------------------
@@ -329,16 +325,20 @@ class TestCopyClassesFile:
 
 
 class TestLoadYoloValidator:
-    def test_stays_none_when_classes_file_missing(self, sandbox: Path) -> None:
-        extractor = Extractor(config=_build_config(sandbox), num_workers=1)
+    def test_stays_none_when_classes_file_missing(
+        self, preprocessing_config: PreprocessingConfig
+    ) -> None:
+        extractor = Extractor(config=preprocessing_config, num_workers=1)
         # Without classes.txt we cannot validate YOLO class IDs.
         extractor._load_yolo_validator()
         assert extractor._yolo_validator is None
 
-    def test_stays_none_when_catalog_load_fails(self, sandbox: Path) -> None:
+    def test_stays_none_when_catalog_load_fails(
+        self, preprocessing_config: PreprocessingConfig
+    ) -> None:
         # A corrupt classes.txt is not fatal: YOLO validation is skipped rather
         # than blocking the entire extraction.  The error is logged upstream.
-        config = _build_config(sandbox)
+        config = preprocessing_config
         config.paths.classes_file.parent.mkdir(parents=True, exist_ok=True)
         config.paths.classes_file.write_text("bad\ncontent\n", encoding="utf-8")
 
