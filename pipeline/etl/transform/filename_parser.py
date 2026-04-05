@@ -103,21 +103,39 @@ class FilenameParser:
     """
     Parser for camera trap filenames.
 
-    Expected stem format:
-    {COUNTRY}_{COORD_N}_{COORD_W}_{DATE}_{SPECIES}_{CAMERA_ID}_{OPTIONAL_SUFFIX}
+    Expected canonical prefix:
+    {COUNTRY}_{COORD_N}_{COORD_W}_{DATE}_{SPECIES}_...
 
-    Only fields required by the ML pipeline are extracted.
+    The parser intentionally locks onto the canonical prefix and ignores the
+    remaining suffix. This keeps metadata extraction resilient to non-standard
+    tails such as vernacular labels, duplicate markers, extra date fragments,
+    or missing camera IDs.
     """
 
-    PATTERN = re.compile(
-        r"^[A-Z]{2}_"  # Country ISO CODE
-        r"(?P<coord_n>N[\d-]+)_"
-        r"(?P<coord_w>W[\d-]+[a-z]?)_"
-        r"\d{8}_"  # Date token (not captured - not the true capture date)
-        r"(?P<species>[A-Za-z-]+)_"
-        r"(?P<camera_id>[A-Za-z0-9-]+)"  # For camera_type detection
-        r"(?:_.+)?$"  # Optional trailing suffix (e.g. _0001)
-    )
+    COUNTRY_PATTERN = re.compile(r"^[A-Z]{2}$")
+    COORD_N_PATTERN = re.compile(r"^N[\d-]+$")
+    COORD_W_PATTERN = re.compile(r"^W[\d-]+[a-z]?$")
+    DATE_PATTERN = re.compile(r"^\d{8}$")
+    SPECIES_PATTERN = re.compile(r"^[A-Za-z-]+$")
+
+    @staticmethod
+    def split_species(raw: str) -> list[str]:
+        """
+        Split a concatenated multi-species string into individual species names.
+
+        Uses binomial nomenclature convention: genus starts with uppercase,
+        epithet with lowercase. The boundary between two species is always
+        a hyphen between a lowercase letter and an uppercase letter.
+
+        Examples:
+            >>> FilenameParser.split_species("Ardea-cinerea-Martes-martes")
+            ['Ardea-cinerea', 'Martes-martes']
+            >>> FilenameParser.split_species("Homo-sapiens-Canis-lupus-familiaris")
+            ['Homo-sapiens', 'Canis-lupus-familiaris']
+            >>> FilenameParser.split_species("Ardea-cinerea")
+            ['Ardea-cinerea']
+        """
+        return re.split(r"(?<=[a-z])-(?=[A-Z])", raw)
 
     @classmethod
     def parse(cls, filename: str, labeled: bool = False) -> PhototrapMetadata:
@@ -134,16 +152,32 @@ class FilenameParser:
         name = Path(filename).stem
         metadata = PhototrapMetadata(filename=filename, labeled=labeled)
 
-        match = cls.PATTERN.match(name)
-        if not match:
-            metadata.parse_error = "Filename does not match expected pattern"
+        parts = name.split("_")
+        if len(parts) < 5:
+            metadata.parse_error = "Filename does not contain the canonical 5-token prefix"
             return metadata
 
-        # Keep parsing strict to avoid silently producing wrong split metadata.
-        groups = match.groupdict()
-        metadata.coord_n = groups["coord_n"]
-        metadata.coord_w = groups["coord_w"]
-        metadata.species = groups["species"]
-        metadata.camera_type = detect_camera_type(groups["camera_id"])
+        country, coord_n, coord_w, date_token, species = parts[:5]
+
+        if not cls.COUNTRY_PATTERN.fullmatch(country):
+            metadata.parse_error = "Invalid country token"
+            return metadata
+        if not cls.COORD_N_PATTERN.fullmatch(coord_n):
+            metadata.parse_error = "Invalid coord_n token"
+            return metadata
+        if not cls.COORD_W_PATTERN.fullmatch(coord_w):
+            metadata.parse_error = "Invalid coord_w token"
+            return metadata
+        if not cls.DATE_PATTERN.fullmatch(date_token):
+            metadata.parse_error = "Invalid date token"
+            return metadata
+        if not cls.SPECIES_PATTERN.fullmatch(species):
+            metadata.parse_error = "Invalid species token"
+            return metadata
+
+        metadata.coord_n = coord_n
+        metadata.coord_w = coord_w
+        metadata.species = species
+        metadata.camera_type = detect_camera_type(name)
         metadata.parse_success = True
         return metadata

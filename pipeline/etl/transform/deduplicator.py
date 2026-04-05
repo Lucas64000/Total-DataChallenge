@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pandas as pd
 
+from pipeline.etl.config import DEFAULT_DEDUP_WINDOW_SECONDS
+
 
 class TemporalDeduplicator:
     """
@@ -13,7 +15,7 @@ class TemporalDeduplicator:
     Rows with missing/invalid grouping keys or timestamp are always kept.
     """
 
-    def __init__(self, window_seconds: int = 3) -> None:
+    def __init__(self, window_seconds: int = DEFAULT_DEDUP_WINDOW_SECONDS) -> None:
         """
         Initialize temporal deduplication.
 

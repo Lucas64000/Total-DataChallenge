@@ -11,12 +11,14 @@ Workflow:
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
+from pipeline.etl.class_catalog import ClassCatalog, load_class_catalog
 from pipeline.etl.config import IMAGE_EXTENSIONS, LABELED_SPECIES, PathConfig
 from pipeline.etl.timestamp_ocr import TimestampExtractor
 from pipeline.etl.transform.filename_parser import FilenameParser
@@ -29,15 +31,13 @@ class _AnnotationSummary:
 
     label_bbox_count: int = 0
     label_bbox_area_sum: float = 0.0
-    label_bbox_area_sum_capped: float = 0.0
-    dominant_species: str | None = None
+    all_species: tuple[str, ...] = ()
 
     def to_stats(self) -> dict[str, float | int]:
         """Convert bbox metrics to record fields."""
         return {
             "label_bbox_count": self.label_bbox_count,
             "label_bbox_area_sum": self.label_bbox_area_sum,
-            "label_bbox_area_sum_capped": self.label_bbox_area_sum_capped,
         }
 
 
@@ -62,7 +62,6 @@ class DataFrameBuilder:
         "ocr_timestamp",
         "label_bbox_count",
         "label_bbox_area_sum",
-        "label_bbox_area_sum_capped",
     )
 
     def __init__(
@@ -83,6 +82,9 @@ class DataFrameBuilder:
         self._logger = get_phototrap_logger().get_logger(
             LogCategory.PREPROCESSING, "dataframe_builder"
         )
+
+        # Lazy-loaded only when a labeled image is processed.
+        self._class_catalog: ClassCatalog | None = None
 
         if extract_timestamps:
             self._timestamp_extractor = TimestampExtractor(gpu=gpu)
@@ -171,6 +173,18 @@ class DataFrameBuilder:
     # Record building (one record = one image)
     # ------------------------------------------------------------------
 
+    def _get_class_catalog(self) -> ClassCatalog:
+        """
+        Return cached class catalog, loading it on first labeled record access.
+
+        This keeps empty/unlabeled-only runs functional even when ``classes.txt``
+        is absent, while preserving strict validation as soon as labeled data is
+        processed.
+        """
+        if self._class_catalog is None:
+            self._class_catalog = load_class_catalog(self._paths.classes_file, LABELED_SPECIES)
+        return self._class_catalog
+
     def _build_record(self, file_path: Path, dataset: str, labeled: bool) -> dict[str, Any]:
         """
         Build one metadata record from one image file.
@@ -192,11 +206,6 @@ class DataFrameBuilder:
         if not metadata.parse_success:
             self._logger.debug("Parse failed for %s: %s", file_path.name, metadata.parse_error)
 
-        # Use parsed location_id when available, otherwise generate a unique
-        # fallback so that downstream grouping (e.g. dedup) treats this image
-        # as its own isolated location instead of crashing on None.
-        location_id = metadata.location_id if metadata.location_id else f"__fallback_{image_id}"
-
         record: dict[str, Any] = {
             "image_id": image_id,
             "path": str(file_path),
@@ -205,7 +214,8 @@ class DataFrameBuilder:
             "labeled": labeled,
             "species": metadata.species,
             "camera_type": metadata.camera_type,
-            "location_id": location_id,
+            # Missing location_id must stay missing, never become a per-image fallback.
+            "location_id": metadata.location_id,
             "ocr_timestamp": None,  # filled later by _attach_ocr_results
         }
 
@@ -216,19 +226,25 @@ class DataFrameBuilder:
 
         # Parse the YOLO annotation file to get bbox stats and authoritative species.
         annotation_path = self._paths.labelized_annotations / f"{file_path.stem}.txt"
-        summary = self._parse_annotation_summary(annotation_path)
+        class_catalog = self._get_class_catalog()
+        summary = self._parse_annotation_summary(
+            annotation_path,
+            class_catalog.source_to_train_class_id,
+            class_catalog.source_classes,
+        )
 
-        if summary.dominant_species:
-            filename_species = metadata.species
-            if filename_species and filename_species != summary.dominant_species:
-                self._logger.warning(
-                    "Species mismatch for %s: filename=%s, annotation=%s",
-                    file_path.name,
-                    filename_species,
-                    summary.dominant_species,
-                )
-            # Annotation species is authoritative for labeled images.
-            record["species"] = summary.dominant_species
+        if summary.all_species:
+            if metadata.species:
+                filename_set = set(FilenameParser.split_species(metadata.species))
+                if filename_set - set(summary.all_species):
+                    self._logger.debug(
+                        "Species mismatch for %s: filename=%s, annotation=%s",
+                        file_path.name,
+                        sorted(filename_set),
+                        sorted(summary.all_species),
+                    )
+            # Annotation dominant species is authoritative for labeled images.
+            record["species"] = summary.all_species[0]
 
         record.update(summary.to_stats())
         return record
@@ -313,14 +329,19 @@ class DataFrameBuilder:
         if "ocr_timestamp" in df.columns:
             df["ocr_timestamp"] = pd.to_datetime(df["ocr_timestamp"], errors="coerce")
 
+        if "location_id" in df.columns:
+            df["location_id"] = (
+                df["location_id"].astype("string").str.strip().replace("", pd.NA)
+            )
+
         if "label_bbox_count" in df.columns:
             df["label_bbox_count"] = (
                 pd.to_numeric(df["label_bbox_count"], errors="coerce").fillna(0).astype("Int64")
             )
 
-        for col in ("label_bbox_area_sum", "label_bbox_area_sum_capped"):
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0).astype("float64")
+        df["label_bbox_area_sum"] = (
+            pd.to_numeric(df["label_bbox_area_sum"], errors="coerce").fillna(0.0).astype("float64")
+        )
 
         if "labeled" in df.columns:
             df["labeled"] = df["labeled"].astype("boolean").fillna(False).astype("bool")
@@ -369,21 +390,25 @@ class DataFrameBuilder:
     @staticmethod
     def _parse_annotation_summary(
         annotation_path: Path,
-        area_cap: float = 0.25,
+        source_to_train: Mapping[int, int],
+        source_classes: tuple[str, ...] = (),
     ) -> _AnnotationSummary:
         """
         Parse one YOLO annotation file and aggregate bbox stats.
 
-        Each valid line contributes to the count and area sums.  An invalid
+        Each valid line contributes to the count and area sum. An invalid
         class token does not discard the geometry — the box is still counted,
         only the class-to-species mapping is skipped.
 
         Args:
             annotation_path: Path to the YOLO ``.txt`` file.
-            area_cap: Per-box area cap for ``label_bbox_area_sum_capped``.
+            source_to_train: Mapping from ``classes.txt`` class ID to canonical
+                ``LABELED_SPECIES`` index (from ``ClassCatalog.source_to_train_class_id``).
+            source_classes: Ordered species names from ``classes.txt``, used to
+                resolve all species present in the annotation (not just labeled ones).
 
         Returns:
-            Summary with bbox count, area sums, and dominant species.
+            Summary with bbox count, area sum, and all species ordered by frequency.
         """
         if not annotation_path.exists():
             return _AnnotationSummary()
@@ -393,10 +418,11 @@ class DataFrameBuilder:
         except (OSError, UnicodeDecodeError):
             return _AnnotationSummary()
 
-        class_counts: dict[int, int] = {}
+        # Track train class counts (for dominant/ordering) and all source class IDs.
+        train_counts: dict[int, int] = {}
+        source_class_ids: set[int] = set()
         count = 0
         area_sum = 0.0
-        area_sum_capped = 0.0
 
         for line in lines:
             parsed = DataFrameBuilder._parse_annotation_line(line)
@@ -406,22 +432,32 @@ class DataFrameBuilder:
             class_idx, area = parsed
             count += 1
             area_sum += area
-            area_sum_capped += min(area, area_cap)
-            if class_idx is not None and 0 <= class_idx < len(LABELED_SPECIES):
-                class_counts[class_idx] = class_counts.get(class_idx, 0) + 1
+            if class_idx is not None:
+                source_class_ids.add(class_idx)
+                train_idx = source_to_train.get(class_idx)
+                if train_idx is not None:
+                    train_counts[train_idx] = train_counts.get(train_idx, 0) + 1
 
-        dominant_species: str | None = None
-        if class_counts:
-            # Use negative count to pick the highest frequency, then smallest class index on ties.
-            dominant_class = min(class_counts, key=lambda idx: (-class_counts[idx], idx))
-            # Dominant species = most frequent class.
-            dominant_species = LABELED_SPECIES[dominant_class]
+        # Build all_species ordered by frequency (most frequent first),
+        # ties broken by smallest class index.
+        all_species: tuple[str, ...] = ()
+        if train_counts:
+            sorted_train = sorted(train_counts, key=lambda idx: (-train_counts[idx], idx))
+            all_species = tuple(LABELED_SPECIES[idx] for idx in sorted_train)
+
+        # Also include non-labeled species from source_classes (for filename comparison).
+        if source_classes:
+            non_labeled = tuple(
+                source_classes[sid]
+                for sid in sorted(source_class_ids)
+                if sid < len(source_classes) and source_classes[sid] not in all_species
+            )
+            all_species = all_species + non_labeled
 
         return _AnnotationSummary(
             label_bbox_count=count,
             label_bbox_area_sum=area_sum,
-            label_bbox_area_sum_capped=area_sum_capped,
-            dominant_species=dominant_species,
+            all_species=all_species,
         )
 
     @staticmethod
