@@ -2,15 +2,11 @@
 
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from pipeline.etl.timestamp_ocr.camera_profiles import BolyProfile, ReconyxProfile, UnknownProfile
-
-
-def _build_reconyx_path(index: int = 1) -> Path:
-    """Build a deterministic Reconyx-style filename used in OCR tests."""
-    return Path(f"FR_N0431652-111_W0000251-205_20220725_Fox_RCNX{index:04d}.jpg")
 
 
 @pytest.fixture
@@ -32,12 +28,13 @@ def unknown_profile() -> UnknownProfile:
 
 
 @pytest.fixture
-def reconyx_path() -> Path:
+def reconyx_path(reconyx_path_builder: Callable[[int], Path]) -> Path:
     """Shared single-image path used across timestamp extractor tests."""
-    return _build_reconyx_path(1)
+    return reconyx_path_builder(1)
 
 
 @pytest.fixture
-def reconyx_path_builder() -> Callable[[int], Path]:
+def reconyx_path_builder(etl_filenames: SimpleNamespace) -> Callable[[int], Path]:
     """Factory fixture to build Reconyx-style paths with a chosen index."""
-    return _build_reconyx_path
+    template = etl_filenames.reconyx_ocr_template
+    return lambda index=1: Path(template.format(index=index))

@@ -5,12 +5,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 from PIL import Image
 
 from pipeline.etl.timestamp_ocr import TimestampExtractor
+from pipeline.etl.timestamp_ocr.camera_profiles import get_profile
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -117,6 +118,19 @@ class TestExtractSingle:
         assert result.raw_text == "no timestamp here"
         assert result.error is not None
 
+    def test_unknown_camera_routes_to_reconyx_profile(self, reconyx_path: Path) -> None:
+        extractor = TimestampExtractor(gpu=False, ocr_engine=_FakeOCREngine())
+
+        with (
+            patch("pipeline.etl.timestamp_ocr.core.get_profile", wraps=get_profile) as profile_spy,
+            _patch_image_open(),
+        ):
+            result = extractor.extract(reconyx_path, camera_type="unknown")
+
+        assert result.success is True
+        assert result.camera_type == "unknown"
+        assert profile_spy.call_args_list == [call("reconyx"), call("boly")]
+
     def test_image_open_failure_returns_error(self, reconyx_path: Path) -> None:
         extractor = TimestampExtractor(gpu=False, ocr_engine=_FakeOCREngine())
 
@@ -194,6 +208,21 @@ class TestExtractBatch:
         assert len(results) == 5
         assert all(r.success for r in results)
 
+    def test_unknown_camera_routes_to_reconyx_profile_in_batch(self) -> None:
+        extractor = TimestampExtractor(gpu=False, ocr_engine=_FakeOCREngine())
+        unknown_path = Path("FR_N0001_W0001_20220101_Fox_CAMERA0001_0001.jpg")
+
+        with (
+            patch("pipeline.etl.timestamp_ocr.core.get_profile", wraps=get_profile) as profile_spy,
+            _patch_image_open(),
+        ):
+            results = extractor.extract_batch([unknown_path], show_progress=False, batch_size=1)
+
+        assert len(results) == 1
+        assert results[0].success is True
+        assert results[0].camera_type == "unknown"
+        assert profile_spy.call_args_list == [call("reconyx"), call("boly")]
+
     def test_splits_work_into_expected_batch_sizes(
         self, reconyx_path_builder: Callable[[int], Path]
     ) -> None:
@@ -239,9 +268,10 @@ class TestExtractBatch:
         engine = _FakeOCREngine(batch_texts=["2021-05-12 10:30:01"])
         extractor = TimestampExtractor(gpu=False, ocr_engine=engine)
         paths = [reconyx_path_builder(1), reconyx_path_builder(2)]
+        broken_name = reconyx_path_builder(2).name
 
         def _open(path: Path) -> _FakeImage:
-            if path.name.endswith("RCNX0002.jpg"):
+            if path.name == broken_name:
                 raise OSError("corrupted image")
             return _FakeImage()
 

@@ -57,8 +57,8 @@ class TestProfileRegistry:
     @pytest.mark.parametrize(
         ("camera_type", "expected_cls", "expected_pattern_count", "expected_bbox"),
         [
-            ("reconyx", ReconyxProfile, 2, (0, 0, 716, 46)),
-            ("boly", BolyProfile, 4, (921, 1474, 2048, 1536)),
+            ("reconyx", ReconyxProfile, 2, (29, 0, 659, 52)),
+            ("boly", BolyProfile, 4, (961, 1437, 2048, 1536)),
             ("unknown", UnknownProfile, 4, (0, 0, 2048, 153)),
         ],
         ids=["reconyx", "boly", "unknown"],
