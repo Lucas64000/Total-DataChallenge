@@ -19,6 +19,8 @@ from pathlib import Path
 
 IMAGE_EXTENSIONS: frozenset[str] = frozenset((".jpg", ".jpeg"))
 
+DEFAULT_DEDUP_WINDOW_SECONDS: int = 5
+
 LABELED_SPECIES: tuple[str, ...] = (
     "Ardea-cinerea",
     "Canis-lupus-familiaris",
@@ -89,6 +91,16 @@ class PathConfig:
             Path to ``data/metadata.csv``.
         """
         return self.output_dir / "metadata.csv"
+
+    @property
+    def dataframe_dedup_output(self) -> Path:
+        """
+        Return the default deduplicated metadata CSV output path.
+
+        Returns:
+            Path to ``data/metadata_dedup.csv``.
+        """
+        return self.output_dir / "metadata_dedup.csv"
 
     @property
     def classes_file(self) -> Path:
